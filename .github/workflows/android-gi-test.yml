@@ -1,0 +1,73 @@
+name: Android GI Test Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-android-gi:
+    name: Build Android GI APK
+    runs-on: ubuntu-24.04
+    container:
+      image: djvdw7f2ro/android-builder-soh:v1.0.4
+
+    steps:
+      - name: Checkout Android GI branch
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Mark workspace as safe
+        shell: bash
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      - name: Write Android SDK configuration
+        shell: bash
+        run: |
+          printf 'sdk.dir=%s\n' "${ANDROID_SDK_ROOT}" > Android/local.properties
+          printf 'ndk.dir=%s\n' "${ANDROID_NDK_HOME}" >> Android/local.properties
+
+      - name: Install host resource dependencies
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y $(cat .github/workflows/apt-deps.txt)
+
+      - name: Generate soh.o2r
+        shell: bash
+        run: |
+          cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-linux --target GenerateSohOtr --parallel 3
+          test -f soh/soh.o2r
+          mkdir -p Android/app/src/main/assets
+          cp soh/soh.o2r Android/app/src/main/assets/soh.o2r
+
+      - name: Build unsigned debug APK
+        shell: bash
+        env:
+          GIT_TAG: android-gi-test
+        run: |
+          cd Android
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          APK=$(find Android/app/build/outputs/apk/debug -type f -name '*.apk' | head -1)
+          test -n "${APK}"
+          mkdir -p artifacts
+          cp "${APK}" artifacts/soh-android-gi-debug.apk
+          sha256sum artifacts/soh-android-gi-debug.apk > artifacts/soh-android-gi-debug.sha256
+
+      - name: Upload Android GI APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: soh-android-gi-debug
+          path: |
+            artifacts/soh-android-gi-debug.apk
+            artifacts/soh-android-gi-debug.sha256
+          if-no-files-found: error
+          retention-days: 7
