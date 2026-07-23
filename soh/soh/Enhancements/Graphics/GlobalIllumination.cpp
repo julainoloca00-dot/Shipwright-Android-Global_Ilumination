@@ -1,39 +1,35 @@
-// Lightweight scene-wide indirect lighting for the Wind Waker-style renderer.
+// Lightweight scene-wide indirect lighting for Android/OpenGL ES.
 //
-// This pass runs once after the complete 3D scene (map and actors) and before the HUD. Two large stencil
-// volumes select the already-rendered geometry using the scene depth buffer: one provides sky/environment
-// indirect light and the other provides warm ground bounce. It does not blur or soften cel-shaded edges.
+// This implementation deliberately does not draw geometry, use stencil volumes, sample the framebuffer,
+// or run a post-process. Instead it temporarily modifies OoT's own scene lighting while the 3D world is
+// rendered: the ambient term receives environment-coloured indirect light, and the weaker of the two
+// environment directional lights becomes a subtle warm bounce coming from below. The original lighting is
+// restored before the HUD and before the next update. Because this travels through the normal N64 lighting
+// path, it affects illuminated map geometry and actors together without visible boxes or screen-space bands.
 
 #include <libultraship/bridge.h>
 
 #include "soh/Enhancements/game-interactor/GameInteractor.h"
 #include "soh/ShipInit.hpp"
 #include "soh/cvar_prefixes.h"
-#include "soh/frame_interpolation.h"
 
 extern "C" {
 #include "z64.h"
-#include "macros.h"
 #include "functions.h"
 #include "variables.h"
 
 extern PlayState* gPlayState;
 }
 
-// Must match Fast::StencilMode in libultraship. These are the same modes already used by WorldLighting.cpp.
-static constexpr s32 GI_STENCIL_OFF = 0;
-static constexpr s32 GI_STENCIL_VOLUME_INCR = 1;
-static constexpr s32 GI_STENCIL_VOLUME_DECR = 2;
-static constexpr s32 GI_STENCIL_COMPOSITE = 3;
-
 static constexpr f32 kDefaultIntensity = 0.22f;
 static constexpr f32 kDefaultGroundBounce = 0.14f;
-static constexpr f32 kDefaultBounceHeight = 300.0f;
-static constexpr f32 kGlobalHalfExtent = 18000.0f;
-static constexpr f32 kGlobalDepth = 30000.0f;
 
-static Vtx sGiBoxVtx[8];
-static bool sGiBoxBuilt = false;
+// The GI is applied only between OnPlayDrawBegin and OnPlayDrawEnd.
+static bool sGiApplied = false;
+static PlayState* sGiPlay = nullptr;
+static u8 sOriginalAmbient[3] = { 0, 0, 0 };
+static LightInfo* sModifiedDirectional = nullptr;
+static LightInfo sOriginalDirectional;
 
 static f32 GiClampF(f32 value, f32 minValue, f32 maxValue) {
     if (value < minValue) {
@@ -45,202 +41,113 @@ static f32 GiClampF(f32 value, f32 minValue, f32 maxValue) {
     return value;
 }
 
-static u8 GiToByte(f32 value) {
-    value = GiClampF(value, 0.0f, 1.0f);
-    return static_cast<u8>((value * 255.0f) + 0.5f);
+static u8 GiClampByte(f32 value) {
+    return static_cast<u8>(GiClampF(value, 0.0f, 255.0f) + 0.5f);
 }
 
-static u8 GiIntensityToAlpha(f32 intensity) {
-    return GiToByte(GiClampF(intensity, 0.0f, 1.0f) * 0.5f);
+static s32 GiDirectionalLuminance(const LightInfo* light) {
+    return static_cast<s32>(light->params.dir.color[0]) + static_cast<s32>(light->params.dir.color[1]) +
+           static_cast<s32>(light->params.dir.color[2]);
 }
 
-static void GiSetBoxVertex(s32 index, s16 x, s16 y, s16 z) {
-    sGiBoxVtx[index].v.ob[0] = x;
-    sGiBoxVtx[index].v.ob[1] = y;
-    sGiBoxVtx[index].v.ob[2] = z;
-    sGiBoxVtx[index].v.flag = 0;
-    sGiBoxVtx[index].v.tc[0] = 0;
-    sGiBoxVtx[index].v.tc[1] = 0;
-    sGiBoxVtx[index].v.cn[0] = 255;
-    sGiBoxVtx[index].v.cn[1] = 255;
-    sGiBoxVtx[index].v.cn[2] = 255;
-    sGiBoxVtx[index].v.cn[3] = 255;
-}
-
-static void GiBuildBox() {
-    if (sGiBoxBuilt) {
+static void RestoreGlobalIllumination() {
+    if (!sGiApplied) {
         return;
     }
 
-    GiSetBoxVertex(0, -100, -100, -100);
-    GiSetBoxVertex(1, 100, -100, -100);
-    GiSetBoxVertex(2, 100, 100, -100);
-    GiSetBoxVertex(3, -100, 100, -100);
-    GiSetBoxVertex(4, -100, -100, 100);
-    GiSetBoxVertex(5, 100, -100, 100);
-    GiSetBoxVertex(6, 100, 100, 100);
-    GiSetBoxVertex(7, -100, 100, 100);
-
-    sGiBoxBuilt = true;
-}
-
-static void GiEmitBox(GraphicsContext* gfxCtx) {
-    OPEN_DISPS(gfxCtx);
-    gSPVertex(POLY_OPA_DISP++, (uintptr_t)sGiBoxVtx, 8, 0);
-    gSP2Triangles(POLY_OPA_DISP++, 4, 5, 6, 0, 4, 6, 7, 0);
-    gSP2Triangles(POLY_OPA_DISP++, 1, 0, 3, 0, 1, 3, 2, 0);
-    gSP2Triangles(POLY_OPA_DISP++, 0, 4, 7, 0, 0, 7, 3, 0);
-    gSP2Triangles(POLY_OPA_DISP++, 5, 1, 2, 0, 5, 2, 6, 0);
-    gSP2Triangles(POLY_OPA_DISP++, 3, 7, 6, 0, 3, 6, 2, 0);
-    gSP2Triangles(POLY_OPA_DISP++, 0, 1, 5, 0, 0, 5, 4, 0);
-    CLOSE_DISPS(gfxCtx);
-}
-
-static void GiComputeIndirectColors(PlayState* play, u8 skyColor[3], u8 groundColor[3]) {
-    const LightInfo* sun = &play->envCtx.dirLight1;
-    const LightInfo* moon = &play->envCtx.dirLight2;
-
-    const s32 sunLum = sun->params.dir.color[0] + sun->params.dir.color[1] + sun->params.dir.color[2];
-    const s32 moonLum = moon->params.dir.color[0] + moon->params.dir.color[1] + moon->params.dir.color[2];
-    const LightInfo* dominant = (moonLum > sunLum) ? moon : sun;
-
-    const f32 daylight =
-        GiClampF((dominant->params.dir.color[0] + dominant->params.dir.color[1] + dominant->params.dir.color[2]) /
-                     (3.0f * 255.0f),
-                 0.0f, 1.0f);
-    const f32 neutralLift = 0.025f + (0.08f * daylight);
-    static constexpr f32 warmGround[3] = { 1.0f, 0.82f, 0.62f };
-
-    for (s32 i = 0; i < 3; ++i) {
-        const f32 ambient = play->lightCtx.ambientColor[i] / 255.0f;
-        const f32 fog = play->lightCtx.fogColor[i] / 255.0f;
-        const f32 key = dominant->params.dir.color[i] / 255.0f;
-
-        const f32 sky = neutralLift + (ambient * 0.55f) + (key * 0.28f) + (fog * 0.10f);
-        const f32 ground =
-            (neutralLift * 0.65f) + (ambient * 0.45f) + (fog * 0.18f) + (key * warmGround[i] * 0.18f);
-
-        skyColor[i] = GiToByte(sky);
-        groundColor[i] = GiToByte(ground);
-    }
-}
-
-static void GiLoadBoxMatrix(PlayState* play, f32 centerX, f32 centerY, f32 centerZ, f32 halfX, f32 halfY,
-                            f32 halfZ) {
-    OPEN_DISPS(play->state.gfxCtx);
-    Matrix_Translate(centerX, centerY, centerZ, MTXMODE_NEW);
-    Matrix_Scale(halfX * 0.01f, halfY * 0.01f, halfZ * 0.01f, MTXMODE_APPLY);
-    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_MODELVIEW | G_MTX_LOAD);
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-// Z-fail stencil mask pass. It reads the depth produced by both map and actors but writes no colour or depth.
-static void GiMaskPass(PlayState* play, s32 stencilMode, u32 cullMode) {
-    OPEN_DISPS(play->state.gfxCtx);
-    gSPStencil(POLY_OPA_DISP++, stencilMode);
-    gDPPipeSync(POLY_OPA_DISP++);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_FRONT | G_CULL_BACK);
-    gSPSetGeometryMode(POLY_OPA_DISP++, G_ZBUFFER | cullMode);
-    gDPSetCombineLERP(POLY_OPA_DISP++, 0, 0, 0, PRIMITIVE, 0, 0, 0, PRIMITIVE, 0, 0, 0, PRIMITIVE, 0, 0, 0,
-                      PRIMITIVE);
-    gDPSetRenderMode(POLY_OPA_DISP++, G_RM_AA_ZB_XLU_SURF, G_RM_AA_ZB_XLU_SURF2);
-    gDPSetPrimColor(POLY_OPA_DISP++, 0, 0, 0, 0, 0, 0);
-    CLOSE_DISPS(play->state.gfxCtx);
-    GiEmitBox(play->state.gfxCtx);
-}
-
-// The stencil mask selects the visible 3D surfaces inside the volume. Because this runs after actor drawing,
-// the composite reaches opaque map geometry and opaque actors together without touching the HUD.
-static void GiCompositePass(PlayState* play, const u8 color[3], u8 alpha) {
-    if (alpha == 0) {
-        return;
+    if (sGiPlay != nullptr) {
+        sGiPlay->lightCtx.ambientColor[0] = sOriginalAmbient[0];
+        sGiPlay->lightCtx.ambientColor[1] = sOriginalAmbient[1];
+        sGiPlay->lightCtx.ambientColor[2] = sOriginalAmbient[2];
     }
 
-    OPEN_DISPS(play->state.gfxCtx);
-    gSPStencil(POLY_OPA_DISP++, GI_STENCIL_COMPOSITE);
-    gDPPipeSync(POLY_OPA_DISP++);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_ZBUFFER | G_CULL_BACK);
-    gSPSetGeometryMode(POLY_OPA_DISP++, G_CULL_FRONT);
-    gDPSetCombineLERP(POLY_OPA_DISP++, 0, 0, 0, PRIMITIVE, 0, 0, 0, PRIMITIVE, 0, 0, 0, PRIMITIVE, 0, 0, 0,
-                      PRIMITIVE);
-    gDPSetRenderMode(POLY_OPA_DISP++, G_RM_AA_XLU_SURF, G_RM_AA_XLU_SURF2);
-    gDPSetPrimColor(POLY_OPA_DISP++, 0, 0, color[0], color[1], color[2], alpha);
-    CLOSE_DISPS(play->state.gfxCtx);
-    GiEmitBox(play->state.gfxCtx);
-}
-
-static void GiDrawIndirectVolume(PlayState* play, f32 centerX, f32 centerY, f32 centerZ, f32 halfX, f32 halfY,
-                                 f32 halfZ, const u8 color[3], u8 alpha) {
-    if (alpha == 0 || halfX <= 0.0f || halfY <= 0.0f || halfZ <= 0.0f) {
-        return;
+    if (sModifiedDirectional != nullptr) {
+        *sModifiedDirectional = sOriginalDirectional;
     }
 
-    GiLoadBoxMatrix(play, centerX, centerY, centerZ, halfX, halfY, halfZ);
-    GiMaskPass(play, GI_STENCIL_VOLUME_INCR, G_CULL_FRONT);
-    GiMaskPass(play, GI_STENCIL_VOLUME_DECR, G_CULL_BACK);
-    GiCompositePass(play, color, alpha);
+    sGiApplied = false;
+    sGiPlay = nullptr;
+    sModifiedDirectional = nullptr;
 }
 
-static void DrawGlobalIllumination() {
+static void ApplyGlobalIllumination() {
+    // Recover cleanly if a previous frame left the draw hook early.
+    RestoreGlobalIllumination();
+
     PlayState* play = gPlayState;
-    if (play == NULL || play->state.gfxCtx == NULL) {
+    if (play == nullptr || play->state.gfxCtx == nullptr) {
         return;
     }
 
-    GiBuildBox();
-
-    const f32 intensity = CVarGetFloat(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Intensity"), kDefaultIntensity);
+    const f32 intensity =
+        GiClampF(CVarGetFloat(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Intensity"), kDefaultIntensity), 0.0f,
+                 1.0f);
     const f32 groundBounce =
-        CVarGetFloat(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.GroundBounce"), kDefaultGroundBounce);
-    const f32 bounceHeight =
-        CVarGetFloat(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.BounceHeight"), kDefaultBounceHeight);
+        GiClampF(CVarGetFloat(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.GroundBounce"), kDefaultGroundBounce),
+                 0.0f, 1.0f);
 
-    const u8 skyAlpha = GiIntensityToAlpha(intensity);
-    const u8 groundAlpha = GiIntensityToAlpha(groundBounce);
-    if (skyAlpha == 0 && groundAlpha == 0) {
+    if (intensity <= 0.0001f && groundBounce <= 0.0001f) {
         return;
     }
 
-    u8 skyColor[3];
-    u8 groundColor[3];
-    GiComputeIndirectColors(play, skyColor, groundColor);
+    sGiPlay = play;
+    sOriginalAmbient[0] = play->lightCtx.ambientColor[0];
+    sOriginalAmbient[1] = play->lightCtx.ambientColor[1];
+    sOriginalAmbient[2] = play->lightCtx.ambientColor[2];
 
-    const f32 eyeX = play->view.eye.x;
-    const f32 eyeY = play->view.eye.y;
-    const f32 eyeZ = play->view.eye.z;
+    LightInfo* light1 = &play->envCtx.dirLight1;
+    LightInfo* light2 = &play->envCtx.dirLight2;
+    const s32 luminance1 = GiDirectionalLuminance(light1);
+    const s32 luminance2 = GiDirectionalLuminance(light2);
+    const LightInfo* dominant = (luminance2 > luminance1) ? light2 : light1;
 
-    // The sky/environment volume surrounds the entire visible scene, affecting map and actors equally.
-    GiDrawIndirectVolume(play, eyeX, eyeY, eyeZ, kGlobalHalfExtent, kGlobalHalfExtent, kGlobalHalfExtent, skyColor,
-                         skyAlpha);
+    // Preserve the dominant sun/moon light. The weaker environment light is temporarily repurposed as a
+    // low-energy bounce, guaranteeing that ToonLighting's key-light selection remains the sun/moon rather
+    // than suddenly flipping below the actors.
+    sModifiedDirectional = (dominant == light1) ? light2 : light1;
+    sOriginalDirectional = *sModifiedDirectional;
 
-    if (groundAlpha > 0) {
-        f32 floorY = eyeY - 50.0f;
-        Player* player = GET_PLAYER(play);
-        if (player != NULL) {
-            if (player->actor.floorHeight > -30000.0f && player->actor.floorHeight < 30000.0f) {
-                floorY = player->actor.floorHeight;
-            } else {
-                floorY = player->actor.world.pos.y;
-            }
-        }
+    const f32 dominantAverage = GiDirectionalLuminance(dominant) / 3.0f;
+    static constexpr f32 warmGround[3] = { 1.00f, 0.78f, 0.54f };
 
-        const f32 top = floorY + GiClampF(bounceHeight, 0.0f, 1200.0f);
-        const f32 bottom = top - kGlobalDepth;
-        const f32 centerY = (top + bottom) * 0.5f;
-        const f32 halfY = (top - bottom) * 0.5f;
+    u8 bounceColor[3] = { 0, 0, 0 };
+    for (s32 channel = 0; channel < 3; ++channel) {
+        const f32 originalAmbient = sOriginalAmbient[channel];
+        const f32 fog = play->lightCtx.fogColor[channel];
+        const f32 key = dominant->params.dir.color[channel];
 
-        GiDrawIndirectVolume(play, eyeX, centerY, eyeZ, kGlobalHalfExtent, halfY, kGlobalHalfExtent, groundColor,
-                             groundAlpha);
+        // Environment-coloured sky fill. This is additive, so it raises dark cel bands instead of replacing
+        // the material colour or painting a translucent rectangle over the image.
+        const f32 environmentHue = (originalAmbient * 0.48f) + (key * 0.34f) + (fog * 0.18f);
+        const f32 environmentLift = intensity * (18.0f + (environmentHue * 0.30f));
+
+        // Warm ground contribution is included in ambient so horizontal floors and scenery also receive it;
+        // the directional term below adds normal-dependent shaping to walls, actors and undersides.
+        const f32 groundHue = (originalAmbient * 0.42f) + (fog * 0.18f) + (key * warmGround[channel] * 0.40f);
+        const f32 groundLift = groundBounce * (10.0f + (groundHue * 0.22f));
+
+        play->lightCtx.ambientColor[channel] = GiClampByte(originalAmbient + environmentLift + groundLift);
+
+        // Keep the bounce weaker than the dominant light at every time of day, so it cannot become the toon key.
+        const f32 bounceLimit = GiClampF((dominantAverage * 0.32f) + 8.0f, 8.0f, 72.0f);
+        bounceColor[channel] = GiClampByte((groundHue / 255.0f) * groundBounce * bounceLimit);
     }
 
-    OPEN_DISPS(play->state.gfxCtx);
-    gSPStencil(POLY_OPA_DISP++, GI_STENCIL_OFF);
-    CLOSE_DISPS(play->state.gfxCtx);
+    // A slightly tilted light from below reaches vertical scenery as well as downward-facing surfaces. It is
+    // intentionally weak; the ambient lift provides the broad GI while this term only gives the bounce shape.
+    Lights_DirectionalSetInfo(sModifiedDirectional, 24, -120, 16, bounceColor[0], bounceColor[1], bounceColor[2]);
+
+    sGiApplied = true;
 }
 
 static void RegisterGlobalIllumination() {
+    // A CVar change can rebuild the hooks between frames. Restore first so disabling GI never leaves modified
+    // scene-light values behind.
+    RestoreGlobalIllumination();
+
     const bool enabled = CVarGetInteger(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Enabled"), 1) != 0;
-    COND_HOOK(OnPlayDrawEnd, enabled, DrawGlobalIllumination);
+    COND_HOOK(OnPlayDrawBegin, enabled, ApplyGlobalIllumination);
+    COND_HOOK(OnPlayDrawEnd, enabled, RestoreGlobalIllumination);
 }
 
 static RegisterShipInitFunc sGlobalIlluminationInit(RegisterGlobalIllumination,
