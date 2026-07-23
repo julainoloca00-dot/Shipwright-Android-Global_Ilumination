@@ -3,6 +3,10 @@ from pathlib import Path
 
 HEADER = Path("libultraship/include/ship/Context.h")
 SOURCE = Path("libultraship/src/ship/Context.cpp")
+MOBILE_HEADER_SOURCE = Path("patches/libultraship-android/MobileImpl.h")
+MOBILE_SOURCE_SOURCE = Path("patches/libultraship-android/MobileImpl.cpp")
+MOBILE_HEADER_TARGET = Path("libultraship/include/ship/port/mobile/MobileImpl.h")
+MOBILE_SOURCE_TARGET = Path("libultraship/src/ship/port/mobile/MobileImpl.cpp")
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -11,6 +15,41 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     if old not in text:
         raise SystemExit(f"Unable to patch {label}: expected source block was not found")
     return text.replace(old, new, 1)
+
+
+def copy_android_mobile_layer() -> None:
+    for source, target in (
+        (MOBILE_HEADER_SOURCE, MOBILE_HEADER_TARGET),
+        (MOBILE_SOURCE_SOURCE, MOBILE_SOURCE_TARGET),
+    ):
+        if not source.is_file():
+            raise SystemExit(f"Android mobile source file is missing: {source}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+    header = MOBILE_HEADER_TARGET.read_text(encoding="utf-8")
+    source = MOBILE_SOURCE_TARGET.read_text(encoding="utf-8")
+    required_header_markers = (
+        "SetToggleButtonVisible",
+        "SetFreeLookTouchEnabled",
+        "SetFirstPersonAimingActive",
+        "InjectMenuNavKeys",
+        "ConsumeGamepadBackPress",
+    )
+    required_source_markers = (
+        "Ship::Mobile::SetToggleButtonVisible",
+        "Ship::Mobile::SetFreeLookTouchEnabled",
+        "Ship::Mobile::SetFirstPersonAimingActive",
+        "Java_com_dishii_soh_MainActivity_attachController",
+        "Java_com_dishii_soh_MainActivity_setCameraState",
+    )
+
+    for marker in required_header_markers:
+        if marker not in header:
+            raise SystemExit(f"Android MobileImpl header validation failed: missing {marker}")
+    for marker in required_source_markers:
+        if marker not in source:
+            raise SystemExit(f"Android MobileImpl source validation failed: missing {marker}")
 
 
 header = HEADER.read_text(encoding="utf-8")
@@ -86,4 +125,5 @@ for marker in required_markers:
         raise SystemExit(f"Android data-root patch validation failed: missing {marker}")
 
 SOURCE.write_text(source, encoding="utf-8")
-print("Roborich libultraship Android data-root integration applied successfully.")
+copy_android_mobile_layer()
+print("Roborich libultraship Android data-root and mobile integrations applied successfully.")
