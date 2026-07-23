@@ -1,0 +1,74 @@
+name: SOHCS Merge Diagnostic
+
+on:
+  push:
+    branches:
+      - android-sohcs-global-illumination
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Android port
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Fetch Roborich celshade branch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name "SOHCS Merge Bot"
+          git config user.email "actions@github.com"
+          git remote add roborich https://github.com/roborich/Shipwright.git
+          git fetch --no-tags roborich wind-waker-style-cel-shading
+          git branch roborich-celshade FETCH_HEAD
+
+      - name: Analyze merge
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p merge-diagnostic/conflicts/base merge-diagnostic/conflicts/android merge-diagnostic/conflicts/celshade
+
+          BASE=$(git merge-base HEAD roborich-celshade)
+          printf '%s\n' "$BASE" > merge-diagnostic/merge-base.txt
+          git rev-parse HEAD > merge-diagnostic/android-head.txt
+          git rev-parse roborich-celshade > merge-diagnostic/celshade-head.txt
+          git log --oneline --decorate "$BASE"..HEAD > merge-diagnostic/android-commits.txt
+          git log --oneline --decorate "$BASE"..roborich-celshade > merge-diagnostic/celshade-commits.txt
+          git diff --name-status "$BASE"..HEAD > merge-diagnostic/android-changed-files.txt
+          git diff --name-status "$BASE"..roborich-celshade > merge-diagnostic/celshade-changed-files.txt
+
+          set +e
+          git merge --no-commit --no-ff roborich-celshade > merge-diagnostic/merge-output.txt 2>&1
+          MERGE_EXIT=$?
+          set -e
+          printf '%s\n' "$MERGE_EXIT" > merge-diagnostic/merge-exit-code.txt
+          git status --short > merge-diagnostic/status.txt
+          git diff --name-only --diff-filter=U > merge-diagnostic/conflict-files.txt
+          git diff --cc > merge-diagnostic/combined-conflicts.diff
+
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            mkdir -p "merge-diagnostic/conflicts/base/$(dirname "$file")"
+            mkdir -p "merge-diagnostic/conflicts/android/$(dirname "$file")"
+            mkdir -p "merge-diagnostic/conflicts/celshade/$(dirname "$file")"
+            git show ":1:$file" > "merge-diagnostic/conflicts/base/$file" 2>/dev/null || true
+            git show ":2:$file" > "merge-diagnostic/conflicts/android/$file" 2>/dev/null || true
+            git show ":3:$file" > "merge-diagnostic/conflicts/celshade/$file" 2>/dev/null || true
+          done < merge-diagnostic/conflict-files.txt
+
+          tar -czf sohcs-merge-diagnostic.tar.gz merge-diagnostic
+
+      - name: Upload merge diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: sohcs-merge-diagnostic
+          path: sohcs-merge-diagnostic.tar.gz
+          if-no-files-found: error
+          retention-days: 7
