@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sohcs-gi-${{ github.ref }}
@@ -32,7 +32,8 @@ jobs:
         shell: bash
         run: bash scripts/build-sohcs-gi-android.sh
 
-      - name: Upload verified SOHCS GI APK
+      - name: Upload SOHCS GI APK and verification
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: SOHCS-GI-Android-debug
@@ -40,8 +41,9 @@ jobs:
             artifacts/SOHCS-GI-debug.apk
             artifacts/SOHCS-GI-debug.sha256
             artifacts/BUILD-INFO.txt
+            artifacts/NATIVE-VALIDATION.txt
             sohcs-gi-badging.txt
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 7
 
       - name: Upload build diagnostics
@@ -52,5 +54,6 @@ jobs:
           path: |
             sohcs-gi-gradle.log
             sohcs-gi-badging.txt
+            artifacts/NATIVE-VALIDATION.txt
           if-no-files-found: ignore
           retention-days: 7
