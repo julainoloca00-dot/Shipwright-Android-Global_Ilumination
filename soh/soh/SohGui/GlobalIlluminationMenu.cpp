@@ -23,31 +23,32 @@ static void AddGlobalIlluminationMenu() {
         .CVar(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Enabled"))
         .RaceDisable(false)
         .Options(CheckboxOptions().DefaultValue(true).Tooltip(
-            "Adds indirect environment light to the complete 3D scene. The stencil volumes affect map geometry "
-            "and opaque actors together while preserving hard cel-shaded shadow edges."));
+            "Adds indirect light through the normal scene-lighting system. It affects illuminated map geometry "
+            "and actors without drawing stencil boxes, screen overlays or extra shadow meshes."));
 
-    mSohMenu->AddWidget(path, "Scene-Wide GI", WIDGET_SEPARATOR_TEXT).PreFunc(hideUnlessEnabled);
+    mSohMenu->AddWidget(path, "Scene Lighting GI", WIDGET_SEPARATOR_TEXT).PreFunc(hideUnlessEnabled);
 
     mSohMenu->AddWidget(path, "Reset All to Defaults", WIDGET_BUTTON)
         .PreFunc(hideUnlessEnabled)
         .Callback([](WidgetInfo& info) {
             CVarClear(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Intensity"));
             CVarClear(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.GroundBounce"));
+            // Clear settings left by the two obsolete screen/stencil implementations.
             CVarClear(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.BounceHeight"));
-            // Remove the obsolete screen-overlay setting left by the first Android test build.
             CVarClear(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.GroundCoverage"));
             Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
         })
-        .Options(ButtonOptions().Tooltip("Restores the scene-wide GI values to their mobile defaults."));
+        .Options(ButtonOptions().Tooltip("Restores the scene-light GI values to their mobile defaults."));
 
     mSohMenu->AddWidget(path, "Environment Intensity", WIDGET_CVAR_SLIDER_FLOAT)
         .CVar(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Intensity"))
         .RaceDisable(false)
         .PreFunc(hideUnlessEnabled)
         .Options(FloatSliderOptions()
-                     .Tooltip("Strength of indirect sky and environment light applied to the visible map and actors.")
+                     .Tooltip("Raises the environment-coloured ambient light used by the map and actors. This brightens "
+                              "dark cel bands without drawing any visible volume.")
                      .Min(0.0f)
-                     .Max(0.60f)
+                     .Max(1.0f)
                      .DefaultValue(0.22f)
                      .IsPercentage());
 
@@ -56,23 +57,12 @@ static void AddGlobalIlluminationMenu() {
         .RaceDisable(false)
         .PreFunc(hideUnlessEnabled)
         .Options(FloatSliderOptions()
-                     .Tooltip("Strength of the warm indirect light reflected upward from the floor onto map surfaces "
-                              "and actors.")
+                     .Tooltip("Adds a subtle warm ambient lift plus a weak directional light coming from below. It "
+                              "travels through the normal map and actor lighting path.")
                      .Min(0.0f)
-                     .Max(0.45f)
+                     .Max(1.0f)
                      .DefaultValue(0.14f)
                      .IsPercentage());
-
-    mSohMenu->AddWidget(path, "Ground Bounce Height", WIDGET_CVAR_SLIDER_FLOAT)
-        .CVar(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.BounceHeight"))
-        .RaceDisable(false)
-        .PreFunc(hideUnlessEnabled)
-        .Options(FloatSliderOptions()
-                     .Tooltip("Height in world units reached by the ground-bounce volume above the player's floor.")
-                     .Min(0.0f)
-                     .Max(1200.0f)
-                     .DefaultValue(300.0f)
-                     .Format("%.0f"));
 }
 
 static RegisterMenuInitFunc sGlobalIlluminationMenuInit(AddGlobalIlluminationMenu);
