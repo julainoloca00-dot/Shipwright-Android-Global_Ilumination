@@ -187,11 +187,9 @@ test -s "${gi_object}"
 
 rm -rf verify-apk
 mkdir -p verify-apk
-unzip -q "${apk}" 'lib/arm64-v8a/libmain.so' -d verify-apk
-strings verify-apk/lib/arm64-v8a/libmain.so > sohcs-gi-native-strings.txt
+unzip -q "${apk}" 'lib/arm64-v8a/libsoh.so' -d verify-apk
+strings verify-apk/lib/arm64-v8a/libsoh.so > sohcs-gi-native-strings.txt
 
-# The APK is stripped by Gradle, so literal-string retention can vary. Record it as a report;
-# compiled object validation above is the authoritative check that the modules entered the Android build.
 {
     echo "Native renderer validation"
     echo "=========================="
@@ -202,11 +200,8 @@ strings verify-apk/lib/arm64-v8a/libmain.so > sohcs-gi-native-strings.txt
         'Graphics.ToonLighting.Enabled' \
         'Graphics.WorldShadows.Enabled' \
         'Graphics.GlobalIllumination.Enabled'; do
-        if grep -a -Fq "${marker}" verify-apk/lib/arm64-v8a/libmain.so; then
-            echo "PRESENT in packaged libmain.so: ${marker}"
-        else
-            echo "NOT RETAINED AS PLAIN TEXT after stripping: ${marker}"
-        fi
+        grep -a -Fq "${marker}" verify-apk/lib/arm64-v8a/libsoh.so
+        echo "PRESENT in packaged libsoh.so: ${marker}"
     done
 } | tee artifacts/NATIVE-VALIDATION.txt
 
@@ -222,7 +217,8 @@ Compiled Android modules:
 - ToonLighting.cpp.o
 - GlobalIllumination.cpp.o
 Package validation:
-- ARM64 libmain.so present
+- ARM64 libsoh.so present
+- Toon Lighting, Actor Shadows and Global Illumination CVars present in libsoh.so
 - Package and application label verified by aapt
 EOF
 
