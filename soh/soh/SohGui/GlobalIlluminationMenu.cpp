@@ -23,31 +23,32 @@ static void AddGlobalIlluminationMenu() {
         .CVar(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Enabled"))
         .RaceDisable(false)
         .Options(CheckboxOptions().DefaultValue(true).Tooltip(
-            "Enables lightweight mobile indirect lighting. The pass has fixed cost, uses no extra framebuffer, "
-            "and does not blur cel-shaded shadow edges."));
+            "Adds indirect environment light to the complete 3D scene. The stencil volumes affect map geometry "
+            "and opaque actors together while preserving hard cel-shaded shadow edges."));
 
-    mSohMenu->AddWidget(path, "Mobile GI", WIDGET_SEPARATOR_TEXT).PreFunc(hideUnlessEnabled);
+    mSohMenu->AddWidget(path, "Scene-Wide GI", WIDGET_SEPARATOR_TEXT).PreFunc(hideUnlessEnabled);
 
     mSohMenu->AddWidget(path, "Reset All to Defaults", WIDGET_BUTTON)
         .PreFunc(hideUnlessEnabled)
         .Callback([](WidgetInfo& info) {
             CVarClear(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Intensity"));
             CVarClear(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.GroundBounce"));
+            CVarClear(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.BounceHeight"));
+            // Remove the obsolete screen-overlay setting left by the first Android test build.
             CVarClear(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.GroundCoverage"));
             Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
         })
-        .Options(ButtonOptions().Tooltip("Restores the Android GI values to their performance-focused defaults."));
+        .Options(ButtonOptions().Tooltip("Restores the scene-wide GI values to their mobile defaults."));
 
-    mSohMenu->AddWidget(path, "Global Intensity", WIDGET_CVAR_SLIDER_FLOAT)
+    mSohMenu->AddWidget(path, "Environment Intensity", WIDGET_CVAR_SLIDER_FLOAT)
         .CVar(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Intensity"))
         .RaceDisable(false)
         .PreFunc(hideUnlessEnabled)
         .Options(FloatSliderOptions()
-                     .Tooltip("Strength of the scene-wide indirect-light lift. Higher values brighten dark cel bands "
-                              "but can reduce direct-light contrast.")
+                     .Tooltip("Strength of indirect sky and environment light applied to the visible map and actors.")
                      .Min(0.0f)
-                     .Max(0.5f)
-                     .DefaultValue(0.16f)
+                     .Max(0.60f)
+                     .DefaultValue(0.22f)
                      .IsPercentage());
 
     mSohMenu->AddWidget(path, "Ground Bounce", WIDGET_CVAR_SLIDER_FLOAT)
@@ -55,23 +56,23 @@ static void AddGlobalIlluminationMenu() {
         .RaceDisable(false)
         .PreFunc(hideUnlessEnabled)
         .Options(FloatSliderOptions()
-                     .Tooltip("Strength of the warm indirect light rising from the lower part of the image.")
+                     .Tooltip("Strength of the warm indirect light reflected upward from the floor onto map surfaces "
+                              "and actors.")
                      .Min(0.0f)
-                     .Max(0.35f)
-                     .DefaultValue(0.10f)
+                     .Max(0.45f)
+                     .DefaultValue(0.14f)
                      .IsPercentage());
 
-    mSohMenu->AddWidget(path, "Ground Coverage", WIDGET_CVAR_SLIDER_FLOAT)
-        .CVar(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.GroundCoverage"))
+    mSohMenu->AddWidget(path, "Ground Bounce Height", WIDGET_CVAR_SLIDER_FLOAT)
+        .CVar(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.BounceHeight"))
         .RaceDisable(false)
         .PreFunc(hideUnlessEnabled)
         .Options(FloatSliderOptions()
-                     .Tooltip("How much of the lower screen receives the ground-bounce gradient. This changes only "
-                              "the gradient placement, not its fixed rendering cost.")
-                     .Min(0.20f)
-                     .Max(0.85f)
-                     .DefaultValue(0.52f)
-                     .IsPercentage());
+                     .Tooltip("Height in world units reached by the ground-bounce volume above the player's floor.")
+                     .Min(0.0f)
+                     .Max(1200.0f)
+                     .DefaultValue(300.0f)
+                     .Format("%.0f"));
 }
 
 static RegisterMenuInitFunc sGlobalIlluminationMenuInit(AddGlobalIlluminationMenu);
