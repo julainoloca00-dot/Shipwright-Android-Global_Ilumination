@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - android-celshade-global-illumination
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
