@@ -1,0 +1,267 @@
+name: SOHCS GI Android Build
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sohcs-gi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Merge Celshade and Build SOHCS GI
+    runs-on: ubuntu-24.04
+    container:
+      image: djvdw7f2ro/android-builder-soh:v1.0.4
+
+    steps:
+      - name: Checkout SOHCS GI branch
+        uses: actions/checkout@v4
+        with:
+          ref: android-sohcs-global-illumination
+          fetch-depth: 0
+          submodules: false
+
+      - name: Configure Git
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          git config user.name "SOHCS Android Builder"
+          git config user.email "actions@github.com"
+
+      - name: Fetch real Roborich celshade source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git remote remove roborich 2>/dev/null || true
+          git remote add roborich https://github.com/roborich/Shipwright.git
+          git fetch --no-tags roborich wind-waker-style-cel-shading
+          git branch -f roborich-celshade FETCH_HEAD
+
+      - name: Merge Android port with celshade
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          if git merge-base --is-ancestor roborich-celshade HEAD; then
+            echo "Roborich celshade is already merged."
+          else
+            set +e
+            git merge --no-commit --no-ff roborich-celshade
+            MERGE_EXIT=$?
+            set -e
+
+            if [ "${MERGE_EXIT}" -ne 0 ]; then
+              # Android does not need the desktop multi-platform build workflow.
+              git rm -f .github/workflows/generate-builds.yml 2>/dev/null || true
+
+              # Keep Android ignores and add the celshade research/generated asset exclusions.
+              git checkout --ours .gitignore
+              grep -q 'wind-waker-style-docs' .gitignore || cat >> .gitignore <<'EOF'
+
+# Allow images embedded in the Wind Waker-style design docs.
+!wind-waker-style-docs/**/*.png
+!wind-waker-style-docs/**/*.jpg
+
+# Third-party/reference assets that are not part of the build.
+/third-party/
+/wind-waker-unpacked/
+/ww-cloud-assets/
+EOF
+
+              # Use Roborich's renderer fork while preserving the Android-compatible extractor forks.
+              cat > .gitmodules <<'EOF'
+[submodule "libultraship"]
+	path = libultraship
+	url = https://github.com/roborich/libultraship.git
+	branch = wind-waker-style-cel-shading
+[submodule "ZAPDTR"]
+	path = ZAPDTR
+	url = https://github.com/please-be-nice/ZAPDTR
+[submodule "OTRExporter"]
+	path = OTRExporter
+	url = https://github.com/please-be-nice/OTRExporter
+EOF
+              git add .gitmodules .gitignore
+
+              # The Android versions are supersets of the conflicting generic changes.
+              git checkout --ours soh/soh/Enhancements/ArrowCycle.cpp
+              git checkout --ours soh/soh/Enhancements/game-interactor/vanilla-behavior/GIVanillaBehavior.h
+              git checkout --ours soh/soh/OTRGlobals.cpp
+              git add soh/soh/Enhancements/ArrowCycle.cpp
+              git add soh/soh/Enhancements/game-interactor/vanilla-behavior/GIVanillaBehavior.h
+              git add soh/soh/OTRGlobals.cpp
+
+              # Resolve the renderer submodule to the exact commit referenced by Roborich's celshade head.
+              git update-index --force-remove libultraship || true
+              git update-index --add --cacheinfo 160000,4698a3d6310d90900cec81e7e93a8337f4e6938f,libultraship
+
+              UNMERGED=$(git diff --name-only --diff-filter=U)
+              if [ -n "${UNMERGED}" ]; then
+                echo "Unresolved merge conflicts:"
+                printf '%s\n' "${UNMERGED}"
+                exit 1
+              fi
+            fi
+          fi
+
+      - name: Apply separate SOHCS GI identity
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, required=True):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if required and old not in text and new not in text:
+                  raise SystemExit(f"Expected text not found in {path}: {old}")
+              text = text.replace(old, new)
+              p.write_text(text, encoding="utf-8")
+
+          replace("Android/app/build.gradle", 'def androidAppVersionName = "9.2.3-android.5"',
+                  'def androidAppVersionName = "9.2.3-sohcs-gi.1"')
+          replace("Android/app/build.gradle", 'applicationId "com.linkzenic.soh"',
+                  'applicationId "com.linkzenic.sohcs.gi"')
+          replace("Android/app/build.gradle", 'def newApkName = "soh_${buildType}_${gitTag}.apk"',
+                  'def newApkName = "sohcs_gi_${buildType}_${gitTag}.apk"')
+
+          replace("Android/app/src/main/res/values/strings.xml",
+                  '<string name="app_name">Ship of Harkinian</string>',
+                  '<string name="app_name">SOHCS GI</string>')
+
+          replace("soh/soh/OTRGlobals.h", 'const std::string appShortName = "soh";',
+                  'const std::string appShortName = "sohcsgi";')
+
+          main = Path("Android/app/src/main/java/com/dishii/soh/MainActivity.java")
+          text = main.read_text(encoding="utf-8")
+          replacements = {
+              "/storage/emulated/0/SOH": "/storage/emulated/0/SOHCS-GI",
+              '"com.dishii.soh.prefs"': '"com.linkzenic.sohcs.gi.prefs"',
+              '"soh-android-support-1"': '"sohcs-gi-android-support-1"',
+              '"SOH"': '"SOHCS-GI"',
+          }
+          for old, new in replacements.items():
+              text = text.replace(old, new)
+          main.write_text(text, encoding="utf-8")
+          PY
+
+          # Prove that the real celshade source, not merely a renamed standard build, is present.
+          test -f soh/soh/Enhancements/Graphics/ToonLighting.cpp
+          test -f soh/soh/SohGui/SohMenuWindWakerStyle.cpp
+          grep -q 'Graphics.ToonLighting.Enabled' soh/soh/Enhancements/Graphics/ToonLighting.cpp
+          test -f soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
+          grep -q 'Graphics.GlobalIllumination.Enabled' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
+
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Merge real Roborich celshade into Android SOHCS GI"
+          fi
+
+      - name: Initialize Android-compatible submodules
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          test "$(git -C libultraship rev-parse HEAD)" = "4698a3d6310d90900cec81e7e93a8337f4e6938f"
+
+      - name: Write Android SDK configuration
+        shell: bash
+        run: |
+          printf 'sdk.dir=%s\n' "${ANDROID_SDK_ROOT}" > Android/local.properties
+          printf 'ndk.dir=%s\n' "${ANDROID_NDK_HOME}" >> Android/local.properties
+
+      - name: Install host resource dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          apt-get update
+          apt-get install -y $(cat .github/workflows/apt-deps.txt) unzip binutils
+
+      - name: Generate celshade soh.o2r
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-linux --target GenerateSohOtr --parallel 3
+          test -f soh/soh.o2r
+          mkdir -p Android/app/src/main/assets
+          cp soh/soh.o2r Android/app/src/main/assets/soh.o2r
+
+      - name: Build SOHCS GI APK
+        shell: bash
+        env:
+          GIT_TAG: sohcs-gi-test
+        run: |
+          set -o pipefail
+          cd Android
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../sohcs-gi-gradle.log
+
+      - name: Verify package and embedded celshade renderer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APK=$(find Android/app/build/outputs/apk/debug -type f -name '*.apk' | head -1)
+          test -n "${APK}"
+
+          AAPT=$(find "${ANDROID_SDK_ROOT}/build-tools" -type f -name aapt | sort -V | tail -1)
+          "${AAPT}" dump badging "${APK}" | tee sohcs-gi-badging.txt
+          grep -q "package: name='com.linkzenic.sohcs.gi'" sohcs-gi-badging.txt
+          grep -q "application-label:'SOHCS GI'" sohcs-gi-badging.txt
+
+          mkdir -p verify-apk
+          unzip -q "${APK}" 'lib/arm64-v8a/libmain.so' -d verify-apk
+          strings verify-apk/lib/arm64-v8a/libmain.so > sohcs-gi-native-strings.txt
+          grep -Fq 'Graphics.ToonLighting.Enabled' sohcs-gi-native-strings.txt
+          grep -Fq 'Graphics.GlobalIllumination.Enabled' sohcs-gi-native-strings.txt
+          grep -Fq 'Graphics.WorldShadows.Enabled' sohcs-gi-native-strings.txt
+
+          mkdir -p artifacts
+          cp "${APK}" artifacts/SOHCS-GI-debug.apk
+          sha256sum artifacts/SOHCS-GI-debug.apk > artifacts/SOHCS-GI-debug.sha256
+          {
+            echo "Android branch: android-sohcs-global-illumination"
+            echo "Roborich celshade: $(git rev-parse roborich-celshade)"
+            echo "Merged commit: $(git rev-parse HEAD)"
+            echo "libultraship: $(git -C libultraship rev-parse HEAD)"
+            echo "Package: com.linkzenic.sohcs.gi"
+            echo "Data folder: SOHCS-GI"
+          } > artifacts/BUILD-INFO.txt
+
+      - name: Push verified merged source branch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git push origin HEAD:android-sohcs-global-illumination
+
+      - name: Upload verified SOHCS GI APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SOHCS-GI-Android-debug
+          path: |
+            artifacts/SOHCS-GI-debug.apk
+            artifacts/SOHCS-GI-debug.sha256
+            artifacts/BUILD-INFO.txt
+            sohcs-gi-badging.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SOHCS-GI-build-diagnostics
+          path: |
+            sohcs-gi-gradle.log
+            sohcs-gi-badging.txt
+          if-no-files-found: ignore
+          retention-days: 7
