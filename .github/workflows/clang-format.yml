@@ -15,7 +15,28 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang-format-14
-      - name: Run clang-format
+      - name: Format changed source files
+        shell: bash
         run: |
-          ./run-clang-format.sh
+          mapfile -d '' changed_files < <(git diff --name-only -z --diff-filter=ACMRT HEAD^1 HEAD)
+          files_to_format=()
+
+          for file in "${changed_files[@]}"; do
+            case "$file" in
+              soh/assets/*)
+                continue
+                ;;
+              soh/src/*.h|soh/include/*.h)
+                continue
+                ;;
+              soh/*.c|soh/*.cpp|soh/*.h|soh/*.hpp)
+                files_to_format+=("$file")
+                ;;
+            esac
+          done
+
+          if (( ${#files_to_format[@]} > 0 )); then
+            clang-format-14 -i "${files_to_format[@]}"
+          fi
+
           git diff --exit-code
