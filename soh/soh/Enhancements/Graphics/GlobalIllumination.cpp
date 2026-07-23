@@ -89,12 +89,6 @@ static void UpdateScreenSpaceSunShadow() {
         return;
     }
 
-    Camera* activeCamera = GET_ACTIVE_CAM(play);
-    if (activeCamera == nullptr) {
-        DisableScreenSpaceSunShadow(renderingApi);
-        return;
-    }
-
     const LightInfo* light1 = &play->envCtx.dirLight1;
     const LightInfo* light2 = &play->envCtx.dirLight2;
     const LightInfo* dominant = DirectionalLuminance(light2) > DirectionalLuminance(light1) ? light2 : light1;
@@ -104,9 +98,11 @@ static void UpdateScreenSpaceSunShadow() {
     f32 lightZ = dominant->params.dir.z;
     NormalizeVector(&lightX, &lightY, &lightZ);
 
-    f32 forwardX = activeCamera->at.x - activeCamera->eye.x;
-    f32 forwardY = activeCamera->at.y - activeCamera->eye.y;
-    f32 forwardZ = activeCamera->at.z - activeCamera->eye.z;
+    // View exposes the exact eye/look-at pair used to render this frame. Using it keeps the projected
+    // light direction correct during normal gameplay, cutscenes, first-person aiming and sub-camera shots.
+    f32 forwardX = play->view.lookAt.x - play->view.eye.x;
+    f32 forwardY = play->view.lookAt.y - play->view.eye.y;
+    f32 forwardZ = play->view.lookAt.z - play->view.eye.z;
     NormalizeVector(&forwardX, &forwardY, &forwardZ);
 
     if (VectorLength(forwardX, forwardY, forwardZ) < 0.0001f) {
