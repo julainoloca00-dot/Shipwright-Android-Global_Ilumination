@@ -1,4 +1,4 @@
-name: SOHCS GI Android Build
+name: SOHCS Sun Shadows Android Build
 
 on:
   pull_request:
@@ -10,36 +10,36 @@ permissions:
   contents: read
 
 concurrency:
-  group: sohcs-gi-${{ github.ref }}
+  group: sohcs-sun-shadows-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Merge Celshade and Build SOHCS GI
+    name: Merge Celshade and Build SOHCS Sun Shadows
     runs-on: ubuntu-24.04
     container:
       image: djvdw7f2ro/android-builder-soh:v1.0.4
 
     steps:
-      - name: Checkout SOHCS GI branch
+      - name: Checkout SOHCS Sun Shadows branch
         uses: actions/checkout@v4
         with:
           ref: android-sohcs-global-illumination
           fetch-depth: 0
           submodules: false
 
-      - name: Merge, build and verify SOHCS GI
+      - name: Merge, build and verify SOHCS Sun Shadows
         shell: bash
         run: bash scripts/build-sohcs-gi-android.sh
 
-      - name: Upload SOHCS GI APK and verification
+      - name: Upload SOHCS Sun Shadows APK and verification
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SOHCS-GI-Android-debug
+          name: SOHCS-Sun-Shadows-v4-Android-debug
           path: |
-            artifacts/SOHCS-GI-debug.apk
-            artifacts/SOHCS-GI-debug.sha256
+            artifacts/SOHCS-Sun-Shadows-v4-debug.apk
+            artifacts/SOHCS-Sun-Shadows-v4-debug.sha256
             artifacts/BUILD-INFO.txt
             artifacts/NATIVE-VALIDATION.txt
             sohcs-gi-badging.txt
@@ -50,7 +50,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SOHCS-GI-build-diagnostics
+          name: SOHCS-Sun-Shadows-v4-build-diagnostics
           path: |
             sohcs-gi-gradle.log
             sohcs-gi-badging.txt
