@@ -53,10 +53,10 @@ static void GiComputeIndirectColors(PlayState* play, u8 skyColor[3], u8 groundCo
     const s32 moonLum = moon->params.dir.color[0] + moon->params.dir.color[1] + moon->params.dir.color[2];
     const LightInfo* dominant = (moonLum > sunLum) ? moon : sun;
 
-    const f32 daylight = GiClampF((dominant->params.dir.color[0] + dominant->params.dir.color[1] +
-                                   dominant->params.dir.color[2]) /
-                                      (3.0f * 255.0f),
-                                  0.0f, 1.0f);
+    const f32 daylight =
+        GiClampF((dominant->params.dir.color[0] + dominant->params.dir.color[1] + dominant->params.dir.color[2]) /
+                     (3.0f * 255.0f),
+                 0.0f, 1.0f);
 
     static constexpr f32 warmGround[3] = { 1.0f, 0.78f, 0.55f };
     f32 rawSky[3];
@@ -93,8 +93,8 @@ static void GiComputeIndirectColors(PlayState* play, u8 skyColor[3], u8 groundCo
     }
 }
 
-static void GiDrawComposite(PlayState* play, const u8 skyColor[3], u8 skyAlpha, const u8 groundColor[3],
-                            u8 groundAlpha, f32 groundCoverage) {
+static void GiDrawComposite(PlayState* play, const u8 skyColor[3], u8 skyAlpha, const u8 groundColor[3], u8 groundAlpha,
+                            f32 groundCoverage) {
     GraphicsContext* gfxCtx = play->state.gfxCtx;
     if (gfxCtx == NULL || (skyAlpha == 0 && groundAlpha == 0)) {
         return;
@@ -152,8 +152,7 @@ static void DrawGlobalIllumination() {
         return;
     }
 
-    const f32 intensity =
-        CVarGetFloat(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Intensity"), kDefaultIntensity);
+    const f32 intensity = CVarGetFloat(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Intensity"), kDefaultIntensity);
     const f32 groundBounce =
         CVarGetFloat(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.GroundBounce"), kDefaultGroundBounce);
     const f32 groundCoverage =
@@ -173,10 +172,9 @@ static void DrawGlobalIllumination() {
 }
 
 static void RegisterGlobalIllumination() {
-    const bool enabled =
-        CVarGetInteger(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Enabled"), 1) != 0;
+    const bool enabled = CVarGetInteger(CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Enabled"), 1) != 0;
     COND_HOOK(OnPlayDrawEnd, enabled, DrawGlobalIllumination);
 }
 
-static RegisterShipInitFunc sGlobalIlluminationInit(
-    RegisterGlobalIllumination, { CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Enabled") });
+static RegisterShipInitFunc sGlobalIlluminationInit(RegisterGlobalIllumination,
+                                                    { CVAR_ENHANCEMENT("Graphics.GlobalIllumination.Enabled") });
