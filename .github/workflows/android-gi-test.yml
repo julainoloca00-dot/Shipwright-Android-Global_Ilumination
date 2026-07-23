@@ -2,9 +2,16 @@ name: Android GI Test Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - android-celshade-global-illumination
 
 permissions:
   contents: read
+
+concurrency:
+  group: android-gi-test-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-android-gi:
