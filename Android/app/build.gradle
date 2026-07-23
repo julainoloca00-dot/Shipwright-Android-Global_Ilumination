@@ -115,16 +115,15 @@ task wrapper(type: Wrapper) {
 
 tasks.register("applyLibultrashipAndroidPatch") {
     doLast {
-        def libultrashipDir = file("${rootProject.projectDir}/../libultraship")
-        def contextFile = file("${libultrashipDir}/src/ship/Context.cpp")
+        def repositoryDir = file("${rootProject.projectDir}/..")
+        def contextFile = file("${repositoryDir}/libultraship/src/ship/Context.cpp")
         if (contextFile.text.contains("sAndroidDataRootPath")) {
             return
         }
 
         exec {
-            workingDir libultrashipDir
-            commandLine "git", "apply", "--ignore-whitespace", "--whitespace=nowarn",
-                    "../patches/libultraship-android-data-root.patch"
+            workingDir repositoryDir
+            commandLine "python3", "scripts/patch-roborich-lus-android-data-root.py"
         }
     }
 }
