@@ -1,5 +1,6 @@
 #include "SohGui.hpp"
 #include "UIWidgets.hpp"
+#include "soh/cvar_prefixes.h"
 
 namespace SohGui {
 
