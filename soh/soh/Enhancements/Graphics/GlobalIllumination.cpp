@@ -70,6 +70,11 @@ static s32 DirectionalLuminance(const LightInfo* light) {
            static_cast<s32>(light->params.dir.color[2]);
 }
 
+static void DisableScreenSpaceSunShadow(Fast::GfxRenderingAPI* renderingApi) {
+    const f32 disabledDirection[2] = { 0.0f, 0.0f };
+    renderingApi->SetScreenSpaceSunShadow(disabledDirection, 0.0f, 0.0f, 0.0f, 0.0f, false);
+}
+
 static void UpdateScreenSpaceSunShadow() {
     Fast::GfxRenderingAPI* renderingApi = GetRenderingApi();
     if (renderingApi == nullptr) {
@@ -80,8 +85,13 @@ static void UpdateScreenSpaceSunShadow() {
         CVarGetInteger(CVAR_ENHANCEMENT("Graphics.ScreenSpaceSunShadows.Enabled"), 1) != 0;
     PlayState* play = gPlayState;
     if (!enabled || play == nullptr) {
-        const f32 disabledDirection[2] = { 0.0f, 0.0f };
-        renderingApi->SetScreenSpaceSunShadow(disabledDirection, 0.0f, 0.0f, 0.0f, 0.0f, false);
+        DisableScreenSpaceSunShadow(renderingApi);
+        return;
+    }
+
+    Camera* activeCamera = GET_ACTIVE_CAM(play);
+    if (activeCamera == nullptr) {
+        DisableScreenSpaceSunShadow(renderingApi);
         return;
     }
 
@@ -94,10 +104,15 @@ static void UpdateScreenSpaceSunShadow() {
     f32 lightZ = dominant->params.dir.z;
     NormalizeVector(&lightX, &lightY, &lightZ);
 
-    f32 forwardX = play->view.at.x - play->view.eye.x;
-    f32 forwardY = play->view.at.y - play->view.eye.y;
-    f32 forwardZ = play->view.at.z - play->view.eye.z;
+    f32 forwardX = activeCamera->at.x - activeCamera->eye.x;
+    f32 forwardY = activeCamera->at.y - activeCamera->eye.y;
+    f32 forwardZ = activeCamera->at.z - activeCamera->eye.z;
     NormalizeVector(&forwardX, &forwardY, &forwardZ);
+
+    if (VectorLength(forwardX, forwardY, forwardZ) < 0.0001f) {
+        DisableScreenSpaceSunShadow(renderingApi);
+        return;
+    }
 
     // right = normalize(cross(forward, worldUp)).
     f32 rightX = -forwardZ;
