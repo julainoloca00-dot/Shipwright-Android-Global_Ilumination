@@ -26,10 +26,8 @@ if ! git merge-base --is-ancestor roborich-celshade HEAD; then
     set -e
 
     if [ "${merge_exit}" -ne 0 ]; then
-        # Desktop CI was intentionally removed by the Android port.
         git rm -f .github/workflows/generate-builds.yml 2>/dev/null || true
 
-        # Android ignore rules plus the generated/reference exclusions used by the celshade fork.
         git checkout --ours .gitignore
         if ! grep -q 'wind-waker-style-docs' .gitignore; then
             cat >> .gitignore <<'EOF'
@@ -45,7 +43,6 @@ if ! git merge-base --is-ancestor roborich-celshade HEAD; then
 EOF
         fi
 
-        # Roborich renderer plus the Android-compatible extraction tools.
         cat > .gitmodules <<'EOF'
 [submodule "libultraship"]
 	path = libultraship
@@ -60,7 +57,6 @@ EOF
 EOF
         git add .gitignore .gitmodules
 
-        # These Android files are supersets of the generic changes on the celshade side.
         git checkout --ours soh/soh/Enhancements/ArrowCycle.cpp
         git checkout --ours soh/soh/Enhancements/game-interactor/vanilla-behavior/GIVanillaBehavior.h
         git checkout --ours soh/soh/OTRGlobals.cpp
@@ -68,7 +64,6 @@ EOF
         git add soh/soh/Enhancements/game-interactor/vanilla-behavior/GIVanillaBehavior.h
         git add soh/soh/OTRGlobals.cpp
 
-        # Resolve the gitlink to the exact renderer revision referenced by Roborich's celshade head.
         git update-index --force-remove libultraship || true
         git update-index --add --cacheinfo "160000,${ROBORICH_LUS_SHA},libultraship"
 
@@ -96,13 +91,9 @@ def replace(path: str, old: str, new: str) -> None:
 replace(
     "Android/app/build.gradle",
     'def androidAppVersionName = "9.2.3-android.5"',
-    'def androidAppVersionName = "9.2.3-sohcs-gi.3"',
+    'def androidAppVersionName = "9.2.3-sohcs-gi.4"',
 )
-replace(
-    "Android/app/build.gradle",
-    "versionCode 13",
-    "versionCode 15",
-)
+replace("Android/app/build.gradle", "versionCode 13", "versionCode 16")
 replace(
     "Android/app/build.gradle",
     'applicationId "com.linkzenic.soh"',
@@ -136,33 +127,37 @@ for old, new in {
 main.write_text(text, encoding="utf-8")
 PY
 
-# Source-level proof that this is the real celshade fork plus scene-light GI.
+# Game-side proof: direct shadows only, no GI, bounce, stencil boxes or ambient modification.
 test -f soh/soh/Enhancements/Graphics/ToonLighting.cpp
 test -f soh/soh/SohGui/SohMenuWindWakerStyle.cpp
 grep -q 'Graphics.ToonLighting.Enabled' soh/soh/Enhancements/Graphics/ToonLighting.cpp
-test -f soh/soh/Enhancements/Graphics/WorldLighting.cpp
-grep -q 'gSPStencil' soh/soh/Enhancements/Graphics/WorldLighting.cpp
 test -f soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
-grep -q 'Graphics.GlobalIllumination.Enabled' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
-grep -q 'Graphics.GlobalIllumination.GroundBounce' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
-grep -q 'OnPlayDrawBegin' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
-grep -q 'Lights_DirectionalSetInfo' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
-grep -q 'lightCtx.ambientColor' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
-if grep -Eq 'gSPStencil|GI_STENCIL|GiEmitBox|GiDrawIndirectVolume' \
+grep -q 'Graphics.ScreenSpaceSunShadows.Enabled' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
+grep -q 'SetScreenSpaceSunShadow' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
+grep -q 'depthStep' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
+if grep -Eq 'GlobalIllumination.GroundBounce|Lights_DirectionalSetInfo|lightCtx.ambientColor|gSPStencil|GI_STENCIL' \
     soh/soh/Enhancements/Graphics/GlobalIllumination.cpp; then
-    echo "ERROR: obsolete stencil-volume GI returned to GlobalIllumination.cpp"
+    echo "ERROR: obsolete GI/bounce/stencil implementation is still present"
     exit 1
 fi
 
 git add -A
 if ! git diff --cached --quiet; then
-    git commit -m "Merge real Roborich celshade with Android scene-light GI v3"
+    git commit -m "Merge real Roborich celshade with Android screen-space sun shadows v4"
 fi
 
-# Initialize the selected renderer and Android extractor forks.
 git submodule sync --recursive
 git submodule update --init --recursive
 test "$(git -C libultraship rev-parse HEAD)" = "${ROBORICH_LUS_SHA}"
+
+# Apply Android storage/mobile integration and the OpenGL ES temporal-depth shadow backend.
+python3 scripts/patch-roborich-lus-android-data-root.py
+grep -q 'SetScreenSpaceSunShadow' libultraship/include/fast/backends/gfx_rendering_api.h
+grep -q 'CaptureSunShadowDepth' libultraship/src/fast/backends/gfx_opengl.cpp
+grep -q 'glBlitFramebuffer' libultraship/src/fast/backends/gfx_opengl.cpp
+grep -q 'computeSunShadow' libultraship/src/fast/shaders/opengl/default.shader.fs
+grep -q 'for (int i = 1; i <= 8; ++i)' libultraship/src/fast/shaders/opengl/default.shader.fs
+grep -q 'toonRamp \*= 1.0 - sunShadow' libultraship/src/fast/shaders/opengl/default.shader.fs
 
 printf 'sdk.dir=%s\n' "${ANDROID_SDK_ROOT}" > Android/local.properties
 printf 'ndk.dir=%s\n' "${ANDROID_NDK_HOME}" >> Android/local.properties
@@ -179,31 +174,29 @@ cp soh/soh.o2r Android/app/src/main/assets/soh.o2r
 set -o pipefail
 (
     cd Android
-    GIT_TAG=sohcs-gi-v3-test ./gradlew assembleDebug --no-daemon --stacktrace
+    GIT_TAG=sohcs-sun-shadow-v4-test ./gradlew assembleDebug --no-daemon --stacktrace
 ) 2>&1 | tee sohcs-gi-gradle.log
 
 apk="$(find Android/app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
 test -n "${apk}"
 
-# Copy the APK immediately. A later diagnostic must never hide a successfully built application.
 mkdir -p artifacts
-cp "${apk}" artifacts/SOHCS-GI-debug.apk
-sha256sum artifacts/SOHCS-GI-debug.apk > artifacts/SOHCS-GI-debug.sha256
+cp "${apk}" artifacts/SOHCS-Sun-Shadows-v4-debug.apk
+sha256sum artifacts/SOHCS-Sun-Shadows-v4-debug.apk > artifacts/SOHCS-Sun-Shadows-v4-debug.sha256
 
 aapt="$(find "${ANDROID_SDK_ROOT}/build-tools" -type f -name aapt | sort -V | tail -1)"
 "${aapt}" dump badging "${apk}" | tee sohcs-gi-badging.txt
 grep -q "package: name='${PACKAGE_ID}'" sohcs-gi-badging.txt
 grep -q "application-label:'${APP_LABEL}'" sohcs-gi-badging.txt
-grep -q "versionCode='15'" sohcs-gi-badging.txt
-grep -q "versionName='9.2.3-sohcs-gi.3'" sohcs-gi-badging.txt
+grep -q "versionCode='16'" sohcs-gi-badging.txt
+grep -q "versionName='9.2.3-sohcs-gi.4'" sohcs-gi-badging.txt
 
-# Validate that the toon renderer and scene-light GI were compiled by the Android NDK.
 toon_object="$(find Android/app/.cxx -type f -name 'ToonLighting.cpp.o' -print -quit)"
-world_light_object="$(find Android/app/.cxx -type f -name 'WorldLighting.cpp.o' -print -quit)"
-gi_object="$(find Android/app/.cxx -type f -name 'GlobalIllumination.cpp.o' -print -quit)"
+shadow_object="$(find Android/app/.cxx -type f -name 'GlobalIllumination.cpp.o' -print -quit)"
+ogl_object="$(find Android/app/.cxx -type f -name 'gfx_opengl.cpp.o' -print -quit)"
 test -s "${toon_object}"
-test -s "${world_light_object}"
-test -s "${gi_object}"
+test -s "${shadow_object}"
+test -s "${ogl_object}"
 
 rm -rf verify-apk
 mkdir -p verify-apk
@@ -214,14 +207,15 @@ strings verify-apk/lib/arm64-v8a/libsoh.so > sohcs-gi-native-strings.txt
     echo "Native renderer validation"
     echo "=========================="
     echo "Toon object: ${toon_object}"
-    echo "World lighting object: ${world_light_object}"
-    echo "Scene-light GI object: ${gi_object}"
+    echo "Sun shadow game object: ${shadow_object}"
+    echo "OpenGL ES backend object: ${ogl_object}"
     echo
     for marker in \
         'Graphics.ToonLighting.Enabled' \
-        'Graphics.WorldShadows.Enabled' \
-        'Graphics.GlobalIllumination.Enabled' \
-        'Graphics.GlobalIllumination.GroundBounce'; do
+        'Graphics.ScreenSpaceSunShadows.Enabled' \
+        'Graphics.ScreenSpaceSunShadows.Strength' \
+        'Graphics.ScreenSpaceSunShadows.Length' \
+        'Graphics.ScreenSpaceSunShadows.Bias'; do
         grep -a -Fq "${marker}" verify-apk/lib/arm64-v8a/libsoh.so
         echo "PRESENT in packaged libsoh.so: ${marker}"
     done
@@ -231,26 +225,20 @@ cat > artifacts/BUILD-INFO.txt <<EOF
 Android branch: ${TARGET_BRANCH}
 Roborich celshade: $(git rev-parse roborich-celshade)
 Build commit: $(git rev-parse HEAD)
-libultraship: $(git -C libultraship rev-parse HEAD)
+libultraship base: $(git -C libultraship rev-parse HEAD)
 Package: ${PACKAGE_ID}
 Application: ${APP_LABEL}
-Version: 9.2.3-sohcs-gi.3 (15)
+Version: 9.2.3-sohcs-gi.4 (16)
 Data folder: ${DATA_FOLDER}
-Compiled Android modules:
-- ToonLighting.cpp.o
-- WorldLighting.cpp.o
-- GlobalIllumination.cpp.o
-GI implementation:
-- Native LightContext ambient lift
-- Weak warm directional bounce using the non-dominant environment light
-- Affects illuminated map geometry and actors through the normal scene-lighting pipeline
-- Original lighting restored at the end of every frame
-- No GI stencil volumes, boxes, screen overlays or extra shadow meshes
-Package validation:
-- ARM64 libsoh.so present
-- Toon Lighting, World Lighting, Actor Shadows and scene-light GI CVars present
-- Package, version and application label verified by aapt
+Direct shadow implementation:
+- Previous-frame depth texture captured with glBlitFramebuffer
+- Eight-step screen-space ray toward the dominant sun/moon light
+- Toon materials remove only the direct lit band when occluded
+- Ordinary depth-tested map materials receive a restrained direct-shadow multiplier
+- HUD and non-depth-tested overlays are excluded
+- No global illumination, ambient lift, ground bounce, stencil GI boxes or second scene render
+Known limitation:
+- Screen-space only: off-camera occluders cannot cast into the visible image
 EOF
 
-# Do not push a generated merge commit from a pull-request workflow.
-echo "SOHCS GI v3 APK built and validated successfully."
+echo "SOHCS screen-space sun shadow v4 APK built and validated successfully."
