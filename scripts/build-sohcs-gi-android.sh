@@ -96,12 +96,12 @@ def replace(path: str, old: str, new: str) -> None:
 replace(
     "Android/app/build.gradle",
     'def androidAppVersionName = "9.2.3-android.5"',
-    'def androidAppVersionName = "9.2.3-sohcs-gi.2"',
+    'def androidAppVersionName = "9.2.3-sohcs-gi.3"',
 )
 replace(
     "Android/app/build.gradle",
     "versionCode 13",
-    "versionCode 14",
+    "versionCode 15",
 )
 replace(
     "Android/app/build.gradle",
@@ -136,7 +136,7 @@ for old, new in {
 main.write_text(text, encoding="utf-8")
 PY
 
-# Source-level proof that this is the real celshade fork plus scene-wide stencil GI.
+# Source-level proof that this is the real celshade fork plus scene-light GI.
 test -f soh/soh/Enhancements/Graphics/ToonLighting.cpp
 test -f soh/soh/SohGui/SohMenuWindWakerStyle.cpp
 grep -q 'Graphics.ToonLighting.Enabled' soh/soh/Enhancements/Graphics/ToonLighting.cpp
@@ -144,13 +144,19 @@ test -f soh/soh/Enhancements/Graphics/WorldLighting.cpp
 grep -q 'gSPStencil' soh/soh/Enhancements/Graphics/WorldLighting.cpp
 test -f soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
 grep -q 'Graphics.GlobalIllumination.Enabled' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
-grep -q 'Graphics.GlobalIllumination.BounceHeight' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
-grep -q 'gSPStencil' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
-grep -q 'GI_STENCIL_COMPOSITE' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
+grep -q 'Graphics.GlobalIllumination.GroundBounce' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
+grep -q 'OnPlayDrawBegin' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
+grep -q 'Lights_DirectionalSetInfo' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
+grep -q 'lightCtx.ambientColor' soh/soh/Enhancements/Graphics/GlobalIllumination.cpp
+if grep -Eq 'gSPStencil|GI_STENCIL|GiEmitBox|GiDrawIndirectVolume' \
+    soh/soh/Enhancements/Graphics/GlobalIllumination.cpp; then
+    echo "ERROR: obsolete stencil-volume GI returned to GlobalIllumination.cpp"
+    exit 1
+fi
 
 git add -A
 if ! git diff --cached --quiet; then
-    git commit -m "Merge real Roborich celshade with scene-wide Android GI v2"
+    git commit -m "Merge real Roborich celshade with Android scene-light GI v3"
 fi
 
 # Initialize the selected renderer and Android extractor forks.
@@ -173,7 +179,7 @@ cp soh/soh.o2r Android/app/src/main/assets/soh.o2r
 set -o pipefail
 (
     cd Android
-    GIT_TAG=sohcs-gi-v2-test ./gradlew assembleDebug --no-daemon --stacktrace
+    GIT_TAG=sohcs-gi-v3-test ./gradlew assembleDebug --no-daemon --stacktrace
 ) 2>&1 | tee sohcs-gi-gradle.log
 
 apk="$(find Android/app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
@@ -188,10 +194,10 @@ aapt="$(find "${ANDROID_SDK_ROOT}/build-tools" -type f -name aapt | sort -V | ta
 "${aapt}" dump badging "${apk}" | tee sohcs-gi-badging.txt
 grep -q "package: name='${PACKAGE_ID}'" sohcs-gi-badging.txt
 grep -q "application-label:'${APP_LABEL}'" sohcs-gi-badging.txt
-grep -q "versionCode='14'" sohcs-gi-badging.txt
-grep -q "versionName='9.2.3-sohcs-gi.2'" sohcs-gi-badging.txt
+grep -q "versionCode='15'" sohcs-gi-badging.txt
+grep -q "versionName='9.2.3-sohcs-gi.3'" sohcs-gi-badging.txt
 
-# Validate that the toon renderer and scene-wide GI were compiled by the Android NDK.
+# Validate that the toon renderer and scene-light GI were compiled by the Android NDK.
 toon_object="$(find Android/app/.cxx -type f -name 'ToonLighting.cpp.o' -print -quit)"
 world_light_object="$(find Android/app/.cxx -type f -name 'WorldLighting.cpp.o' -print -quit)"
 gi_object="$(find Android/app/.cxx -type f -name 'GlobalIllumination.cpp.o' -print -quit)"
@@ -209,13 +215,13 @@ strings verify-apk/lib/arm64-v8a/libsoh.so > sohcs-gi-native-strings.txt
     echo "=========================="
     echo "Toon object: ${toon_object}"
     echo "World lighting object: ${world_light_object}"
-    echo "Scene-wide GI object: ${gi_object}"
+    echo "Scene-light GI object: ${gi_object}"
     echo
     for marker in \
         'Graphics.ToonLighting.Enabled' \
         'Graphics.WorldShadows.Enabled' \
         'Graphics.GlobalIllumination.Enabled' \
-        'Graphics.GlobalIllumination.BounceHeight'; do
+        'Graphics.GlobalIllumination.GroundBounce'; do
         grep -a -Fq "${marker}" verify-apk/lib/arm64-v8a/libsoh.so
         echo "PRESENT in packaged libsoh.so: ${marker}"
     done
@@ -228,22 +234,23 @@ Build commit: $(git rev-parse HEAD)
 libultraship: $(git -C libultraship rev-parse HEAD)
 Package: ${PACKAGE_ID}
 Application: ${APP_LABEL}
-Version: 9.2.3-sohcs-gi.2 (14)
+Version: 9.2.3-sohcs-gi.3 (15)
 Data folder: ${DATA_FOLDER}
 Compiled Android modules:
 - ToonLighting.cpp.o
 - WorldLighting.cpp.o
 - GlobalIllumination.cpp.o
 GI implementation:
-- Scene depth + stencil volumes
-- Environment indirect light affects map and opaque actors
-- Ground bounce affects map and opaque actors
-- No full-screen 2D GI overlay
+- Native LightContext ambient lift
+- Weak warm directional bounce using the non-dominant environment light
+- Affects illuminated map geometry and actors through the normal scene-lighting pipeline
+- Original lighting restored at the end of every frame
+- No GI stencil volumes, boxes, screen overlays or extra shadow meshes
 Package validation:
 - ARM64 libsoh.so present
-- Toon Lighting, World Lighting, Actor Shadows and scene-wide GI CVars present
+- Toon Lighting, World Lighting, Actor Shadows and scene-light GI CVars present
 - Package, version and application label verified by aapt
 EOF
 
 # Do not push a generated merge commit from a pull-request workflow.
-echo "SOHCS GI v2 APK built and validated successfully."
+echo "SOHCS GI v3 APK built and validated successfully."
